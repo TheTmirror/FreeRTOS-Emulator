@@ -20,6 +20,38 @@
 
 /* #include "AsyncIO.h" */
 
+/* NEW */
+
+#define displayTask_PRIORITY (1)
+#define inputTask_PRIORITY (2)
+#define timeTask_PRIORITY (3)
+
+static TaskHandle_t displayHandle = NULL;
+static TaskHandle_t inputHandle = NULL;
+static TaskHandle_t timeHandle = NULL;
+
+static portTickType stopWatchTime = 0;
+
+void displayTaskBody() {
+    portTickType lastTimeAwake;
+    while(1) {
+        lastTimeAwake = xTaskGetTickCount();
+        printf("%d", stopWatchTime);
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+/* END */
+
 #define mainGENERIC_PRIORITY (tskIDLE_PRIORITY)
 #define mainGENERIC_STACK_SIZE ((unsigned short)2560)
 #define mainTask1_PRIORITY (3)
@@ -29,9 +61,9 @@
 static TaskHandle_t Task1 = NULL;
 static TaskHandle_t Task2 = NULL;
 static TaskHandle_t Task3 = NULL;
-const portTickType xPeriod1 = 1000;
-const portTickType xPeriod2 = 5000;
-const portTickType xPeriod3 = 10000;
+const portTickType xPeriod1 = 100;
+const portTickType xPeriod2 = 500;
+const portTickType xPeriod3 = 1000;
 
 void vTaskBody1(void *pvParameters)
 {
@@ -75,12 +107,14 @@ void vTaskBody3(void *pvParameters)
 
 int main(int argc, char *argv[])
 {
-    xTaskCreate(vTaskBody1, "Task1", mainGENERIC_STACK_SIZE * 2, NULL,
+    /*xTaskCreate(vTaskBody1, "Task1", mainGENERIC_STACK_SIZE * 2, NULL,
                     mainTask1_PRIORITY, &Task1); 
     xTaskCreate(vTaskBody2, "Task2", mainGENERIC_STACK_SIZE * 2, NULL,
                     mainTask2_PRIORITY, &Task2); 
     xTaskCreate(vTaskBody3, "Task3", mainGENERIC_STACK_SIZE * 2, NULL,
-                    mainTask3_PRIORITY, &Task3); 
+                    mainTask3_PRIORITY, &Task3);*/
+
+    xTaskCreate(displayTaskBody, "Display Task", mainGENERIC_STACK_SIZE * 2, NULL, displayTask_PRIORITY, &displayHandle);
     vTaskStartScheduler();
 
     return EXIT_SUCCESS;
