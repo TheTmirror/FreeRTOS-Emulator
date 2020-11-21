@@ -20,101 +20,87 @@
 
 /* #include "AsyncIO.h" */
 
-/* NEW */
+#define mainGENERIC_PRIORITY (tskIDLE_PRIORITY)
+#define mainGENERIC_STACK_SIZE ((unsigned short)2560)
 
 #define displayTask_PRIORITY (1)
 #define inputTask_PRIORITY (2)
 #define timeTask_PRIORITY (3)
 
+#define INPUT_SIZE (16)
+
 static TaskHandle_t displayHandle = NULL;
 static TaskHandle_t inputHandle = NULL;
 static TaskHandle_t timeHandle = NULL;
 
+static portTickType displayPeriode = 100;
+static portTickType inputPeriode = 100;
+static portTickType timePeriode = 100;
+
 static portTickType stopWatchTime = 0;
+static portTickType lastRecord = 0;
+
+enum{running, stop, clear};
+static int currentState = stop;
+
+static char input[INPUT_SIZE];
 
 void displayTaskBody() {
     portTickType lastTimeAwake;
     while(1) {
         lastTimeAwake = xTaskGetTickCount();
-        printf("%d", stopWatchTime);
+        printf("%f\n", (stopWatchTime * portTICK_RATE_MS) / 1000.0);
+        vTaskDelayUntil(&lastTimeAwake, displayPeriode);
     }
 }
 
+void inputTaskBody() {
+    portTickType lastTimeAwake;
+    while(1) {
+        lastTimeAwake = xTaskGetTickCount();
+        fgets(input, sizeof input, stdin);
+        switch(input[0]) {
+            case 'r':
+                currentState = running;
+                break;
+            case 's':
+                currentState = stop;
+                break;
+            case 'c':
+                stopWatchTime = 0;
+                input[0] = 'x';
+                break;
+        }
 
+        if(currentState == running) {
+            lastRecord = xTaskGetTickCount();
+        }
 
-
-
-
-
-
-
-
-
-/* END */
-
-#define mainGENERIC_PRIORITY (tskIDLE_PRIORITY)
-#define mainGENERIC_STACK_SIZE ((unsigned short)2560)
-#define mainTask1_PRIORITY (3)
-#define mainTask2_PRIORITY (2)
-#define mainTask3_PRIORITY (1)
-
-static TaskHandle_t Task1 = NULL;
-static TaskHandle_t Task2 = NULL;
-static TaskHandle_t Task3 = NULL;
-const portTickType xPeriod1 = 100;
-const portTickType xPeriod2 = 500;
-const portTickType xPeriod3 = 1000;
-
-void vTaskBody1(void *pvParameters)
-{
-    portTickType xLastWakeTime;
-    while (1) {
-        xLastWakeTime = xTaskGetTickCount();
-        // Basic sleep of 1000 milliseconds
-        /* vTaskDelay((TickType_t)1000); */
-        printf("Task 1\n");
-        vTaskDelayUntil(&xLastWakeTime, xPeriod1);
+        vTaskDelayUntil(&lastTimeAwake, inputPeriode);
     }
 }
 
-void vTaskBody2(void *pvParameters)
-{
-    portTickType xLastWakeTime;
-    while (1) {
-        xLastWakeTime = xTaskGetTickCount();
-        // Basic sleep of 1000 milliseconds
-        /* vTaskDelay((TickType_t)1000); */
-        printf("Task 2\n");
-        /* tumFUtilPrintTaskStateList(); */
-        /* tumFUtilPrintTaskUtils(); */
-        vTaskDelayUntil(&xLastWakeTime, xPeriod2);
-    }
-}
+void timeTaskBody() {
+    portTickType lastTimeAwake;
+    while(1) {
+        lastTimeAwake = xTaskGetTickCount();
 
-void vTaskBody3(void *pvParameters)
-{
-    portTickType xLastWakeTime;
-    while (1) {
-        xLastWakeTime = xTaskGetTickCount();
-        // Basic sleep of 1000 milliseconds
-        /* vTaskDelay((TickType_t)1000); */
-        printf("Task 3\n");
-        /* tumFUtilPrintTaskStateList(); */
-        /* tumFUtilPrintTaskUtils(); */
-        vTaskDelayUntil(&xLastWakeTime, xPeriod3);
+        switch(currentState) {
+            case running:
+                stopWatchTime += lastTimeAwake - lastRecord;
+                lastRecord = xTaskGetTickCount();
+                break;
+        }
+
+        vTaskDelayUntil(&lastTimeAwake, timePeriode);
     }
 }
 
 int main(int argc, char *argv[])
 {
-    /*xTaskCreate(vTaskBody1, "Task1", mainGENERIC_STACK_SIZE * 2, NULL,
-                    mainTask1_PRIORITY, &Task1); 
-    xTaskCreate(vTaskBody2, "Task2", mainGENERIC_STACK_SIZE * 2, NULL,
-                    mainTask2_PRIORITY, &Task2); 
-    xTaskCreate(vTaskBody3, "Task3", mainGENERIC_STACK_SIZE * 2, NULL,
-                    mainTask3_PRIORITY, &Task3);*/
-
     xTaskCreate(displayTaskBody, "Display Task", mainGENERIC_STACK_SIZE * 2, NULL, displayTask_PRIORITY, &displayHandle);
+    xTaskCreate(inputTaskBody, "Input Task", mainGENERIC_STACK_SIZE * 2, NULL, inputTask_PRIORITY, &inputHandle);
+    xTaskCreate(timeTaskBody, "Time Task", mainGENERIC_STACK_SIZE * 2, NULL, timeTask_PRIORITY, &timeHandle);
     vTaskStartScheduler();
 
     return EXIT_SUCCESS;
