@@ -70,6 +70,7 @@
 /* Standard includes. */
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 /* Defining MPU_WRAPPERS_INCLUDED_FROM_API_FILE prevents task.h from redefining
 all the API functions to use the MPU wrappers.  That should only be done when
@@ -390,6 +391,13 @@ PRIVILEGED_DATA static volatile UBaseType_t uxDeletedTasksWaitingCleanUp = (UBas
 PRIVILEGED_DATA static List_t xSuspendedTaskList;                   /*< Tasks that are currently suspended. */
 
 #endif
+
+/* Timer changes */
+
+#define TIMEWHEEL_CAPACITY 100000
+List_t timewheel[TIMEWHEEL_CAPACITY];
+
+/* ------------------- */
 
 /* Other file private variables. --------------------------------*/
 PRIVILEGED_DATA static volatile UBaseType_t uxCurrentNumberOfTasks  = (UBaseType_t) 0U;
@@ -2350,68 +2358,39 @@ BaseType_t xTaskIncrementTick(void)
         delayed lists if it wraps to 0. */
         xTickCount = xConstTickCount;
 
-        if (xConstTickCount == (TickType_t) 0U) {
-            taskSWITCH_DELAYED_LISTS();
-        }
-        else {
-            mtCOVERAGE_TEST_MARKER();
-        }
-
-        /* See if this tick has made a timeout expire.  Tasks are stored in
-        the queue in the order of their wake time - meaning once one task
-        has been found whose block time has not expired there is no need to
-        look any further down the list. */
-        if (xConstTickCount >= xNextTaskUnblockTime) {
-            for (;;) {
-                if (listLIST_IS_EMPTY(pxDelayedTaskList) != pdFALSE) {
-                    /* The delayed list is empty.  Set xNextTaskUnblockTime
-                    to the maximum possible value so it is extremely
-                    unlikely that the
-                    if( xTickCount >= xNextTaskUnblockTime ) test will pass
-                    next time through. */
-                    xNextTaskUnblockTime = portMAX_DELAY; /*lint !e961 MISRA exception as the casts are only redundant for some ports. */
+        /* Checking the current bucket */
+        List_t* bucket = &timewheel[xConstTickCount % TIMEWHEEL_CAPACITY];
+        while(1) {
+                if(listLIST_IS_EMPTY(bucket) == pdTRUE) {
                     break;
                 }
+
+                /* The delayed list is not empty, get the value of the
+                item at the head of the delayed list.  This is the time
+                at which the task at the head of the delayed list must
+                be removed from the Blocked state. */
+                pxTCB = (TCB_t *) listGET_OWNER_OF_HEAD_ENTRY(bucket);
+                xItemValue = listGET_LIST_ITEM_VALUE(&(pxTCB->xStateListItem));
+
+                /* It is time to remove the item from the Blocked state. */
+                (void) uxListRemove(&(pxTCB->xStateListItem));
+
+                /* Is the task waiting on an event also?  If so remove
+                it from the event list. */
+                if (listLIST_ITEM_CONTAINER(&(pxTCB->xEventListItem)) != NULL) {
+                    (void) uxListRemove(&(pxTCB->xEventListItem));
+                }
                 else {
-                    /* The delayed list is not empty, get the value of the
-                    item at the head of the delayed list.  This is the time
-                    at which the task at the head of the delayed list must
-                    be removed from the Blocked state. */
-                    pxTCB = (TCB_t *) listGET_OWNER_OF_HEAD_ENTRY(pxDelayedTaskList);
-                    xItemValue = listGET_LIST_ITEM_VALUE(&(pxTCB->xStateListItem));
+                    mtCOVERAGE_TEST_MARKER();
+                }
 
-                    if (xConstTickCount < xItemValue) {
-                        /* It is not time to unblock this item yet, but the
-                        item value is the time at which the task at the head
-                        of the blocked list must be removed from the Blocked
-                        state - so record the item value in
-                        xNextTaskUnblockTime. */
-                        xNextTaskUnblockTime = xItemValue;
-                        break;
-                    }
-                    else {
-                        mtCOVERAGE_TEST_MARKER();
-                    }
-
-                    /* It is time to remove the item from the Blocked state. */
-                    (void) uxListRemove(&(pxTCB->xStateListItem));
-
-                    /* Is the task waiting on an event also?  If so remove
-                    it from the event list. */
-                    if (listLIST_ITEM_CONTAINER(&(pxTCB->xEventListItem)) != NULL) {
-                        (void) uxListRemove(&(pxTCB->xEventListItem));
-                    }
-                    else {
-                        mtCOVERAGE_TEST_MARKER();
-                    }
-
-                    /* Place the unblocked task into the appropriate ready
-                    list. */
-                    prvAddTaskToReadyList(pxTCB);
+                /* Place the unblocked task into the appropriate ready
+                list. */
+                prvAddTaskToReadyList(pxTCB);
 
                     /* A task being unblocked cannot cause an immediate
                     context switch if preemption is turned off. */
-#if (  configUSE_PREEMPTION == 1 )
+                #if (  configUSE_PREEMPTION == 1 )
                     {
                         /* Preemption is on, but a context switch should
                         only be performed if the unblocked task has a
@@ -2424,9 +2403,7 @@ BaseType_t xTaskIncrementTick(void)
                             mtCOVERAGE_TEST_MARKER();
                         }
                     }
-#endif /* configUSE_PREEMPTION */
-                }
-            }
+                #endif /* configUSE_PREEMPTION */
         }
 
         /* Tasks of equal priority to the currently running task will share
@@ -3111,8 +3088,16 @@ static void prvInitialiseTaskLists(void)
         vListInitialise(&(pxReadyTasksLists[ uxPriority ]));
     }
 
+    /* Initialize Timewheel */
+    for(unsigned int i = 0; i < TIMEWHEEL_CAPACITY; i++) {
+        vListInitialise(&timewheel[i]);
+    }
+
+    /* ------------ */
+
     vListInitialise(&xDelayedTaskList1);
     vListInitialise(&xDelayedTaskList2);
+
     vListInitialise(&xPendingReadyList);
 
 #if ( INCLUDE_vTaskDelete == 1 )
@@ -4391,6 +4376,7 @@ static void prvAddCurrentTaskToDelayedList(TickType_t xTicksToWait, const BaseTy
             vListInsertEnd(&xSuspendedTaskList, &(pxCurrentTCB->xStateListItem));
         }
         else {
+            /* Timewheel */
             /* Calculate the time at which the task should be woken if the event
             does not occur.  This may overflow but this doesn't matter, the
             kernel will manage it correctly. */
@@ -4399,6 +4385,15 @@ static void prvAddCurrentTaskToDelayedList(TickType_t xTicksToWait, const BaseTy
             /* The list item will be inserted in wake time order. */
             listSET_LIST_ITEM_VALUE(&(pxCurrentTCB->xStateListItem), xTimeToWake);
 
+            /* Check for overflow */
+            assert(xTicksToWait / TIMEWHEEL_CAPACITY == 0);
+
+            List_t* bucket = &timewheel[xTimeToWake % TIMEWHEEL_CAPACITY];
+            vListInsertEnd(bucket, &(pxCurrentTCB->xStateListItem));
+
+            /* ---------- */
+            
+            #ifdef false
             if (xTimeToWake < xConstTickCount) {
                 /* Wake time has overflowed.  Place this item in the overflow
                 list. */
@@ -4419,6 +4414,7 @@ static void prvAddCurrentTaskToDelayedList(TickType_t xTicksToWait, const BaseTy
                     mtCOVERAGE_TEST_MARKER();
                 }
             }
+            #endif
         }
     }
 #else /* INCLUDE_vTaskSuspend */
